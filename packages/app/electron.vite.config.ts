@@ -18,5 +18,11 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react()],
+    // Библиотека удаления фона грузится лениво (worker при первом нажатии);
+    // без предоптимизации vite в dev перезагружает страницу посреди работы
+    // («optimized dependencies changed. reloading») — холст пропадает.
+    optimizeDeps: {
+      include: ['@imgly/background-removal'],
+    },
   },
 })

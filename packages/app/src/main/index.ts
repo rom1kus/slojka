@@ -9,9 +9,13 @@ import { registerFileIpc } from './files'
 import { registerAiIpc, sidecar } from './sidecar'
 import { mcpBridge } from './mcpBridge'
 import { registerTerminalIpc } from './ptyHost'
+import { registerResScheme, registerResProtocol } from './resProtocol'
 
 // Имя приложения = BRAND.id: определяет userData (~/.config/slojka) и пр.
 app.setName(BRAND.id)
+
+// Привилегированные схемы регистрируются строго до whenReady.
+registerResScheme()
 
 const isSmoke = process.argv.includes('--smoke')
 const isDev = !!process.env['ELECTRON_RENDERER_URL']
@@ -38,7 +42,11 @@ function createWindow(): void {
       nodeIntegration: false,
       // sandbox выключен осознанно: ESM-preload; узкий API через contextBridge.
       sandbox: false,
-      additionalArguments: isSmoke ? ['--slojka-smoke'] : [],
+      additionalArguments: [
+        ...(isSmoke ? ['--slojka-smoke'] : []),
+        // Долгий этап смоука (инференс удаления фона) — только по запросу.
+        ...(isSmoke && process.env['SLOJKA_SMOKE_REMOVEBG'] ? ['--slojka-smoke-removebg'] : []),
+      ],
     },
   })
 
@@ -102,10 +110,12 @@ function registerIpc(): void {
  * Код выхода 0 + строка SMOKE_RESULT — платформа пригодна.
  */
 function setupSmoke(): void {
+  // Инференс удаления фона на CPU долгий — с ним лимит щедрее.
+  const limitMs = process.env['SLOJKA_SMOKE_REMOVEBG'] ? 180_000 : 20_000
   const timeout = setTimeout(() => {
-    console.error('SMOKE_FAIL timeout: renderer не отчитался за 20с')
+    console.error(`SMOKE_FAIL timeout: renderer не отчитался за ${limitMs / 1000}с`)
     app.exit(1)
-  }, 20_000)
+  }, limitMs)
 
   ipcMain.once('smoke:report', (_e, info: unknown) => {
     clearTimeout(timeout)
@@ -127,6 +137,7 @@ function setupSmoke(): void {
 }
 
 app.whenReady().then(() => {
+  registerResProtocol()
   registerIpc()
   registerFileIpc(
     () => mainWindow,

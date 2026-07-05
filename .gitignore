@@ -2,6 +2,7 @@ node_modules/
 out/
 dist/
 release/
+packages/app/build/imgly/
 *.log
 .DS_Store
 .env

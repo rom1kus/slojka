@@ -24,6 +24,9 @@ extraResources:
   # MCP-сервер — один заранее забандленный файл.
   - from: ../mcp-server/dist/index.cjs
     to: mcp-server/index.cjs
+  # Данные «Удалить фон» (модель ISNet + wasm), см. tools/prepare-imgly-data.mjs.
+  - from: build/imgly
+    to: imgly
 
 linux:
   target:

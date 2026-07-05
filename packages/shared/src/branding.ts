@@ -13,7 +13,7 @@ export const BRAND = {
   fileExt: '.slojka',
   /** Mimetype файла проекта (пишется в zip первым файлом, как в OpenRaster). */
   mimetype: 'image/x-slojka',
-  version: '0.1.0',
+  version: '0.2.0',
 } as const
 
 export type Brand = typeof BRAND

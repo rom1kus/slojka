@@ -353,6 +353,9 @@ class EditorController {
   duplicateLayer(id: string): void {
     this.engine?.duplicateLayer(id)
   }
+  flipLayer(id: string, axis: 'h' | 'v'): void {
+    this.engine?.flipLayer(id, axis)
+  }
   mergeLayers(ids: string[]): void {
     this.engine?.mergeLayers(ids)
   }

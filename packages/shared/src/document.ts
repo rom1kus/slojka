@@ -45,6 +45,16 @@ export interface GlowStyle {
   spread?: number
 }
 
+export interface StrokeStyle {
+  enabled: boolean
+  /** #rrggbb */
+  color: string
+  /** 0..1 */
+  opacity: number
+  /** Толщина обводки наружу от края, px (1..50). */
+  size: number
+}
+
 export interface BlurStyle {
   enabled: boolean
   /** Радиус гаусса, px (0..100). */
@@ -71,6 +81,7 @@ export interface LayerStyles {
   dropShadow?: ShadowStyle
   innerShadow?: ShadowStyle
   outerGlow?: GlowStyle
+  stroke?: StrokeStyle
   colorOverlay?: ColorOverlayStyle
   gaussianBlur?: BlurStyle
   motionBlur?: MotionBlurStyle
@@ -90,6 +101,13 @@ export const DEFAULT_GLOW: GlowStyle = {
   color: '#ffd86b',
   opacity: 0.65,
   size: 16,
+}
+
+export const DEFAULT_STROKE: StrokeStyle = {
+  enabled: true,
+  color: '#ffffff',
+  opacity: 1,
+  size: 4,
 }
 
 export const DEFAULT_COLOR_OVERLAY: ColorOverlayStyle = {

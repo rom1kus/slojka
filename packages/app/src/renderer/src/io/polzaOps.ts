@@ -177,17 +177,19 @@ async function compositeBase64(outlineMask?: Uint8Array): Promise<string> {
   return bytesToBase64(png)
 }
 
-/** Ближайшее к документу соотношение сторон из поддерживаемых моделями. */
+/**
+ * Ближайшее к документу соотношение сторон. Только универсальный набор,
+ * который принимают ВСЕ модели (gpt-image, например, не знает 3:2/2:3/21:9 —
+ * «Модель не поддерживает aspect_ratio»). Небольшое расхождение пропорций
+ * компенсируется при вставке результата (cover-заполнение под холст).
+ */
 function closestAspect(w: number, h: number): string {
   const choices: [string, number][] = [
     ['1:1', 1],
     ['4:3', 4 / 3],
     ['3:4', 3 / 4],
-    ['3:2', 3 / 2],
-    ['2:3', 2 / 3],
     ['16:9', 16 / 9],
     ['9:16', 9 / 16],
-    ['21:9', 21 / 9],
   ]
   const r = w / h
   return choices.reduce((best, c) => (Math.abs(c[1] - r) < Math.abs(best[1] - r) ? c : best))[0]
@@ -284,6 +286,198 @@ export async function submitObjectEdit(mode: 'remove' | 'replace'): Promise<void
   }
 }
 
+/**
+ * «Фотобаш»: всё видимое на холсте виртуально сводится в одну картинку и
+ * уходит выбранной модели с промтом профессионального photobash/matte
+ * painting — модель пересобирает коллаж в цельную сцену (единый свет,
+ * камера, материалы). {} в шаблоне — описание сцены из поля промта.
+ */
+const PHOTOBASH_PROMPT = `PROFESSIONAL PHOTOBASH + MATTE PAINTING
+
+Create a seamless high-end photobash and matte painting. This is NOT a collage, NOT a digital illustration, and NOT simple photo manipulation. The final image must look like a single premium concept-art keyframe created for a Hollywood blockbuster by a senior AAA concept artist.
+
+PRIMARY GOAL
+
+Every imported asset is ONLY a semantic and geometric reference.
+
+Completely discard the original appearance of every source.
+
+Do NOT preserve:
+- original lighting
+- original shadows
+- original highlights
+- original color grading
+- original exposure
+- original white balance
+- original atmosphere
+- original camera response
+- original lens characteristics
+- original era
+- original photographic style
+- original rendering style
+
+Reconstruct every object as if it had been photographed specifically for this scene.
+
+IMAGE RECONSTRUCTION
+
+Treat every element as raw material.
+
+After placing assets, completely rebuild them:
+- re-light surfaces
+- repaint textures
+- recreate reflections
+- recreate shadows
+- rebuild local colors
+- rebuild material response
+- refine silhouettes
+- reconstruct edges
+- recreate microdetails
+
+Never simply blend photos. Reconstruct them into one coherent image.
+
+GLOBAL COHERENCE
+
+Everything must exist in one physical environment with:
+
+- one camera
+- one lens
+- one focal length
+- one perspective
+- one depth of field
+- one exposure
+- one white balance
+- one color science
+- one HDR response
+- one atmospheric perspective
+- one lighting setup
+- one global illumination solution
+- one shadow softness
+- one level of detail
+- one texture density
+- one grain structure
+- one sharpness profile
+
+Every object must appear photographed in the same place, at the same moment, with the same camera.
+
+LIGHTING
+
+Ignore lighting from every source image.
+
+Assume every imported asset was photographed incorrectly.
+
+Re-light everything from scratch using only the lighting of the current scene.
+
+All highlights, shadows, reflections, bounce light and ambient light must be regenerated consistently.
+
+MATERIALS
+
+All materials must be physically believable.
+
+Metal behaves like real metal.
+Glass like real glass.
+Fabric like real fabric.
+Stone like real stone.
+Concrete like real concrete.
+Skin like real skin.
+
+Use realistic:
+- micro surface detail
+- subtle imperfections
+- edge wear
+- roughness variation
+- fine scratches
+- dirt accumulation
+- physically plausible reflections
+
+MATTE PAINTING
+
+Create a cinematic environment with:
+- layered depth
+- atmospheric haze
+- realistic scale
+- natural perspective
+- volumetric lighting
+- coherent background integration
+
+The background must feel like part of the same photograph, never a separate plate.
+
+FINAL OVERPAINT
+
+After compositing, perform a full-scene overpaint.
+
+Unify:
+- lighting
+- materials
+- textures
+- edges
+- color response
+- atmosphere
+- contrast
+- microdetails
+
+The final image must look painted over as a whole, not assembled from separate assets.
+
+QUALITY
+
+Hollywood feature film concept art.
+AAA concept art.
+Premium cinematic matte painting.
+Studio-quality compositing.
+Production-ready keyframe.
+Ultra-refined finish.
+Invisible source integration.
+Extreme visual cohesion.
+Highest production value.
+
+NEGATIVE CONSTRAINTS
+
+No collage.
+No cutout look.
+No visible compositing.
+No mismatched lighting.
+No mismatched color grading.
+No mismatched sharpness.
+No mismatched perspective.
+No floating objects.
+No halos.
+No masking artifacts.
+No duplicated textures.
+No inconsistent shadows.
+No inconsistent reflections.
+No CGI pasted onto photos.
+No obvious source boundaries.
+No separate visual styles.
+No mixed photographic eras.
+
+SCENE:
+{}`
+
+export async function submitPhotobash(): Promise<void> {
+  const s = usePolzaStore.getState()
+  const engine = editor.engineForIo
+  if (!engine.hasDocument) return
+  s.set({ busy: true, error: null })
+  try {
+    const docJson = engine.getDocumentJson()!
+    const image = await compositeBase64()
+    const job = await window.slojka.polzaGenerate({
+      kind: 'photobash',
+      model: s.model,
+      input: {
+        prompt: PHOTOBASH_PROMPT.replace('{}', s.prompt.trim()),
+        images: [{ type: 'base64', data: image }],
+        // Ориентация результата — примерно как у холста.
+        aspect_ratio: closestAspect(docJson.width, docJson.height),
+      },
+    })
+    watchJob(job.id)
+    s.set({ busy: false })
+    await refreshJobs()
+  } catch (e) {
+    setError(e)
+  }
+}
+
 export async function cancelJob(id: string): Promise<void> {
   await window.slojka.polzaCancel(id).catch(setError)
   await refreshJobs()
@@ -319,7 +513,7 @@ export async function insertResult(jobId: string, index: number): Promise<void> 
 
     const doc = engine.getDocumentJson()
     let toast = 'Результат вставлен новым слоем'
-    if (doc && (job?.kind === 'remove' || job?.kind === 'replace')) {
+    if (doc && (job?.kind === 'remove' || job?.kind === 'replace' || job?.kind === 'photobash')) {
       const arDoc = doc.width / doc.height
       const arImg = bmp.width / bmp.height
       let sx = doc.width / bmp.width

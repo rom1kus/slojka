@@ -283,6 +283,49 @@ export function runEngineSelfTest(): SelfTestResult {
     }
     engine.setLayerStyles(boxId, undefined)
 
+    // 5д². Внешняя обводка: зелёное кольцо снаружи квадрата, внутри чисто.
+    engine.setLayerStyles(boxId, {
+      stroke: { enabled: true, color: '#00ff00', opacity: 1, size: 6 },
+    })
+    c = engine.readComposite()
+    const ringPx = px(c.pixels, 64, 21, 32) // 3px левее края квадрата (24..40)
+    if (ringPx[1]! < 140 || ringPx[0]! > 120) {
+      failures.push(`обводка не видна: ${ringPx.join(',')}`)
+    }
+    // Угол: кольцо обязано идти и по диагонали от угла (24,24) — ~5.7px < 6.
+    const cornerRing = px(c.pixels, 64, 20, 20)
+    if (cornerRing[1]! < 140 || cornerRing[0]! > 120) {
+      failures.push(`обводка в углу: ${cornerRing.join(',')}`)
+    }
+    if (!near(px(c.pixels, 64, 32, 32), [255, 0, 0, 255], 8)) {
+      failures.push(`обводка внутри квадрата: ${px(c.pixels, 64, 32, 32).join(',')}`)
+    }
+    if (!near(px(c.pixels, 64, 6, 6), [255, 255, 255, 255], 6)) {
+      failures.push(`обводка залила фон: ${px(c.pixels, 64, 6, 6).join(',')}`)
+    }
+    engine.setLayerStyles(boxId, undefined)
+
+    // 5д³. Свечение в углу: спад изотропен по евклидову расстоянию —
+    // диагональ от угла объекта светится так же, как перпендикуляр от края.
+    engine.newDocument(64, 64, 'transparent')
+    engine.addLayer('G')
+    engine.selectRect(24, 24, 16, 16, 'replace')
+    engine.fillSelectedArea([1, 0, 0, 1])
+    engine.deselect()
+    const glowId = engine.getDocumentJson()!.activeLayerId!
+    engine.setLayerStyles(glowId, {
+      outerGlow: { enabled: true, color: '#00ff00', opacity: 1, size: 10 },
+    })
+    c = engine.readComposite()
+    const cornerGlow = px(c.pixels, 64, 20, 20) // диагональ от угла, ~5.7px
+    if (cornerGlow[3]! < 60 || cornerGlow[1]! < 40) {
+      failures.push(`свечение в углу: ${cornerGlow.join(',')}`)
+    }
+    if (px(c.pixels, 64, 18, 32)[3]! < 60) {
+      failures.push(`свечение у края: ${px(c.pixels, 64, 18, 32).join(',')}`)
+    }
+    engine.setLayerStyles(glowId, undefined)
+
     // 5е. Floating: вырезать выделенное, сдвинуть на 12px, применить.
     engine.newDocument(32, 32, 'white')
     engine.addLayer('Sq')
@@ -504,6 +547,91 @@ export function runEngineSelfTest(): SelfTestResult {
       failures.push(
         `расширение холста: угол ${px(c.pixels, 96, 4, 4).join(',')}, центр ${px(c.pixels, 96, 48, 40).join(',')}`,
       )
+    }
+
+    // 5п. Замена пикселей слоя и оригинала smart-слоя (базис «Удалить фон»).
+    engine.newDocument(32, 32, 'white')
+    engine.addLayer('RPL')
+    engine.fillActiveLayer([1, 0, 0, 1])
+    const rplId = engine.getDocumentJson()!.activeLayerId!
+    // Левая половина — непрозрачный зелёный, правая — прозрачная (premult).
+    const half = new Uint8Array(32 * 32 * 4)
+    for (let y = 0; y < 32; y++) {
+      for (let x = 0; x < 16; x++) {
+        const i = (y * 32 + x) * 4
+        half[i + 1] = 255
+        half[i + 3] = 255
+      }
+    }
+    if (!engine.replaceLayerPixels(rplId, half)) failures.push('replaceLayerPixels отказал')
+    c = engine.readComposite()
+    if (!near(px(c.pixels, 32, 8, 16), [0, 255, 0, 255], 6)) {
+      failures.push(`replace: слева ${px(c.pixels, 32, 8, 16).join(',')}`)
+    }
+    if (!near(px(c.pixels, 32, 24, 16), [255, 255, 255, 255], 6)) {
+      failures.push(`replace: справа ${px(c.pixels, 32, 24, 16).join(',')}`)
+    }
+    engine.undo()
+    c = engine.readComposite()
+    if (!near(px(c.pixels, 32, 24, 16), [255, 0, 0, 255], 6)) {
+      failures.push(`undo replace: ${px(c.pixels, 32, 24, 16).join(',')}`)
+    }
+    // Smart-слой: замена оригинала сохраняет трансформацию (сдвиг dx=8).
+    if (!engine.convertToSmart(rplId)) failures.push('replace-smart: convertToSmart')
+    engine.setSmartTransform(rplId, { dx: 8 }, { history: false })
+    const rplSrc = engine.readSourcePixels(rplId)
+    if (!rplSrc) {
+      failures.push('replace-smart: readSourcePixels отказал')
+    } else {
+      const green = new Uint8Array(rplSrc.w * rplSrc.h * 4)
+      for (let i = 0; i < green.length; i += 4) {
+        green[i + 1] = 255
+        green[i + 3] = 255
+      }
+      if (!engine.replaceSourcePixels(rplId, green)) failures.push('replaceSourcePixels отказал')
+      c = engine.readComposite()
+      if (!near(px(c.pixels, 32, 20, 16), [0, 255, 0, 255], 6)) {
+        failures.push(`replace-smart: центр ${px(c.pixels, 32, 20, 16).join(',')}`)
+      }
+      if (!near(px(c.pixels, 32, 4, 16), [255, 255, 255, 255], 6)) {
+        failures.push(`replace-smart: сдвиг потерян ${px(c.pixels, 32, 4, 16).join(',')}`)
+      }
+      engine.undo()
+      c = engine.readComposite()
+      if (!near(px(c.pixels, 32, 20, 16), [255, 0, 0, 255], 6)) {
+        failures.push(`undo replace-smart: ${px(c.pixels, 32, 20, 16).join(',')}`)
+      }
+    }
+
+    // 5р. Зеркало слоя: отражение вокруг центра содержимого (как в PS) + undo;
+    // smart — через знак масштаба. Содержимое асимметрично: красный слева,
+    // синий справа (bbox x=2..29) — после флипа цвета меняются местами.
+    engine.newDocument(32, 32, 'white')
+    engine.addLayer('FL')
+    engine.selectRect(2, 12, 8, 8, 'replace')
+    engine.fillSelectedArea([1, 0, 0, 1])
+    engine.selectRect(22, 12, 8, 8, 'replace')
+    engine.fillSelectedArea([0, 0, 1, 1])
+    engine.deselect()
+    const flId = engine.getDocumentJson()!.activeLayerId!
+    if (!engine.flipLayer(flId, 'h')) failures.push('flipLayer отказал')
+    c = engine.readComposite()
+    if (!near(px(c.pixels, 32, 6, 16), [0, 0, 255, 255], 6)) {
+      failures.push(`флип: слева не синий ${px(c.pixels, 32, 6, 16).join(',')}`)
+    }
+    if (!near(px(c.pixels, 32, 26, 16), [255, 0, 0, 255], 6)) {
+      failures.push(`флип: справа не красный ${px(c.pixels, 32, 26, 16).join(',')}`)
+    }
+    engine.undo()
+    c = engine.readComposite()
+    if (!near(px(c.pixels, 32, 6, 16), [255, 0, 0, 255], 6)) {
+      failures.push(`undo флипа: ${px(c.pixels, 32, 6, 16).join(',')}`)
+    }
+    if (!engine.convertToSmart(flId)) failures.push('флип-smart: convertToSmart')
+    engine.flipLayer(flId, 'h')
+    c = engine.readComposite()
+    if (!near(px(c.pixels, 32, 6, 16), [0, 0, 255, 255], 6)) {
+      failures.push(`smart-флип: ${px(c.pixels, 32, 6, 16).join(',')}`)
     }
 
     // 5. Ластик по заполненному слою.

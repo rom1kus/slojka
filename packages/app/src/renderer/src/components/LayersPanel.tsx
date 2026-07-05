@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { BLEND_MODES, type BlendMode } from '@slojka/shared'
 import { editor } from '../controller/EditorController'
 import { useEditorStore } from '../stores/editorStore'
+import { removeLayerBackground } from '../tools/removeBgTool'
 import { TextPanel } from './TextPanel'
 import { HistoryPanel } from './HistoryPanel'
 import { StylesDialog } from './StylesDialog'
@@ -20,6 +21,7 @@ export function LayersPanel(): React.JSX.Element {
   const docJson = useEditorStore((s) => s.docJson)
   const maskEditLayerId = useEditorStore((s) => s.maskEditLayerId)
   const layerThumbs = useEditorStore((s) => s.layerThumbs)
+  const bgRemovalLayerId = useEditorStore((s) => s.bgRemovalLayerId)
   const selectedIds = useEditorStore((s) => s.selectedLayerIds)
   const setSelectedIds = useEditorStore((s) => s.setSelectedLayerIds)
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -212,6 +214,9 @@ export function LayersPanel(): React.JSX.Element {
             >
               {layerThumbs[layer.id] && <img src={layerThumbs[layer.id]} alt="" draggable={false} />}
             </span>
+            {bgRemovalLayerId === layer.id && (
+              <span className="spinner" title={t('layers.ctxRemoveBgBusy')} />
+            )}
             {layer.kind === 'text' && <span className="layer-badge">Т</span>}
             {layer.kind === 'raster' && layer.smart && (
               <span className="layer-badge smart" title={t('layers.smartBadge')}>
@@ -372,6 +377,43 @@ export function LayersPanel(): React.JSX.Element {
               <span className="menu-accel">Ctrl+J</span>
             </button>
           )}
+          {ctxMenu.layerId &&
+            docJson.layers.find((l) => l.id === ctxMenu.layerId)?.kind === 'raster' && (
+              <>
+                <button
+                  className="menu-item"
+                  disabled={bgRemovalLayerId !== null}
+                  onClick={() => {
+                    void removeLayerBackground(ctxMenu.layerId!)
+                    setCtxMenu(null)
+                  }}
+                >
+                  <span>
+                    {bgRemovalLayerId !== null
+                      ? t('layers.ctxRemoveBgBusy')
+                      : t('layers.ctxRemoveBg')}
+                  </span>
+                </button>
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    editor.flipLayer(ctxMenu.layerId!, 'h')
+                    setCtxMenu(null)
+                  }}
+                >
+                  <span>{t('layers.ctxFlipH')}</span>
+                </button>
+                <button
+                  className="menu-item"
+                  onClick={() => {
+                    editor.flipLayer(ctxMenu.layerId!, 'v')
+                    setCtxMenu(null)
+                  }}
+                >
+                  <span>{t('layers.ctxFlipV')}</span>
+                </button>
+              </>
+            )}
           {multi && (
             <button
               className="menu-item"

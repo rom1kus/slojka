@@ -1,6 +1,6 @@
 {
   "name": "@slojka/app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
@@ -11,9 +11,11 @@
     "smoke": "electron-vite build && electron . --smoke",
     "rebuild-native": "electron-rebuild -f -o node-pty",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "dist": "electron-vite build && electron-builder --linux"
+    "dist": "node ../../tools/prepare-imgly-data.mjs && electron-vite build && electron-builder --linux"
   },
   "dependencies": {
+    "@imgly/background-removal": "1.4.5",
+    "@imgly/background-removal-data": "1.4.5",
     "@slojka/engine": "*",
     "@slojka/shared": "*",
     "@types/ws": "^8.18.1",

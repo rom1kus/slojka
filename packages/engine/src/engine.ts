@@ -38,6 +38,9 @@ import {
   FRAG_SHADOW_COLOR,
   FRAG_SHADOW_MASK,
   FRAG_THRESHOLD,
+  FRAG_JFA_INIT,
+  FRAG_JFA_STEP,
+  FRAG_DIST_SHAPE,
   VERT,
 } from './gl/shaders'
 import { History, PixelPatch, type Rect } from './history/history'
@@ -136,6 +139,16 @@ interface DocRuntime {
   blurB: Texture | null
   /** Уменьшенные скретчи для больших радиусов (ключ — фактор даунсемпла). */
   blurSmall: Map<number, { a: Texture; b: Texture }>
+  /** Кэш R8-масок теней/свечения (ключ «layerId:слот») — см. buildShadow. */
+  styleMaskCache: Map<string, { tex: Texture; key: string }>
+  /** Скретчи JFA-поля расстояний (RG32F, разрешение ≤ ~4 Мп), по требованию. */
+  jfa: { a: Texture; b: Texture; fbo: Fbo; factor: number } | null
+  /**
+   * Кэш готового поля расстояний (одна запись — последний слой). Поле не
+   * зависит от радиусов: тик ползунка размера/spread переиспользует его,
+   * пересчитывая только дешёвый проход «расстояние → форма».
+   */
+  distField: { tex: Texture; key: string } | null
 }
 
 const OP_INDEX: Record<SelectionOp, number> = { replace: 0, add: 1, subtract: 2, intersect: 3 }
@@ -198,6 +211,11 @@ export class Engine {
   private progFloat: Program
   private progPlace: Program
   private progThreshold: Program
+  private progJfaInit: Program
+  private progJfaStep: Program
+  private progDistShape: Program
+  /** Рендер в float-текстуры доступен (EXT_color_buffer_float) — путь JFA. */
+  private floatRT = false
 
   private doc: DocRuntime | null = null
   private stroke: ActiveStroke | null = null
@@ -242,6 +260,10 @@ export class Engine {
     this.progFloat = new Program(gl, VERT, FRAG_FLOAT, 'float')
     this.progPlace = new Program(gl, VERT, FRAG_PLACE, 'place')
     this.progThreshold = new Program(gl, VERT, FRAG_THRESHOLD, 'threshold')
+    this.progJfaInit = new Program(gl, VERT, FRAG_JFA_INIT, 'jfaInit')
+    this.progJfaStep = new Program(gl, VERT, FRAG_JFA_STEP, 'jfaStep')
+    this.progDistShape = new Program(gl, VERT, FRAG_DIST_SHAPE, 'distShape')
+    this.floatRT = !!gl.getExtension('EXT_color_buffer_float')
     this.history = new History(256 * 1024 * 1024, 200, () => this.emit())
   }
 
@@ -315,6 +337,9 @@ export class Engine {
       blurA: null,
       blurB: null,
       blurSmall: new Map(),
+      styleMaskCache: new Map(),
+      jfa: null,
+      distField: null,
     }
     const bg = this.createRasterRuntime('Фон')
     this.doc.layers.push(bg)
@@ -773,6 +798,173 @@ export class Engine {
     this.emit()
   }
 
+  /**
+   * Полная замена пикселей растрового слоя (premultiplied RGBA размером
+   * с холст) с undo. Для smart-слоя не годится — источник рассинхронизируется,
+   * используйте replaceSourcePixels.
+   */
+  replaceLayerPixels(id: string, pixels: Uint8Array, label = 'history.removeBg'): boolean {
+    const doc = this.requireDoc()
+    const layer = this.findLayer(id)
+    if (!layer || layer.json.kind !== 'raster' || layer.json.smart) return false
+    if (pixels.byteLength !== doc.width * doc.height * 4) return false
+
+    doc.attachFbo.attach(layer.texture)
+    const rect = { x: 0, y: 0, w: doc.width, h: doc.height }
+    const before = new PixelPatch(rect, doc.attachFbo.readPixels(0, 0, doc.width, doc.height))
+    const after = new PixelPatch(rect, pixels)
+
+    layer.texture.upload(pixels, 0, 0, doc.width, doc.height)
+    const engine = this
+    const layerId = layer.json.id
+    this.touch(layer)
+    this.history.push({
+      label,
+      bytes: before.bytes + after.bytes,
+      undo: () => engine.uploadPatch(layerId, 'pixels', before),
+      redo: () => engine.uploadPatch(layerId, 'pixels', after),
+    })
+    this.invalidate()
+    this.emit()
+    return true
+  }
+
+  /**
+   * Замена оригинала smart-слоя (premultiplied RGBA размером srcW×srcH)
+   * с undo. Трансформация не трогается — слой перерисовывается из нового
+   * оригинала, содержимое за краем холста сохраняется.
+   */
+  replaceSourcePixels(id: string, pixels: Uint8Array, label = 'history.removeBg'): boolean {
+    const layer = this.findLayer(id)
+    if (!layer?.source || layer.json.kind !== 'raster' || !layer.json.smart) return false
+    const { srcW, srcH } = layer.json.smart
+    if (pixels.byteLength !== srcW * srcH * 4) return false
+
+    const doc = this.requireDoc()
+    doc.attachFbo.attach(layer.source)
+    const rect = { x: 0, y: 0, w: srcW, h: srcH }
+    const before = new PixelPatch(rect, doc.attachFbo.readPixels(0, 0, srcW, srcH))
+    const after = new PixelPatch(rect, pixels)
+
+    const engine = this
+    const apply = (patch: PixelPatch): void => {
+      const l = engine.findLayer(id)
+      if (!l?.source || l.json.kind !== 'raster' || !l.json.smart) return
+      const r = patch.rect
+      l.source.upload(patch.unpack(), r.x, r.y, r.w, r.h)
+      engine.renderSmart(l)
+    }
+    apply(after)
+    this.history.push({
+      label,
+      bytes: before.bytes + after.bytes,
+      undo: () => apply(before),
+      redo: () => apply(after),
+    })
+    this.emit()
+    return true
+  }
+
+  /**
+   * Отзеркалить слой по горизонтали или вертикали. Растровый — флип
+   * пикселей и маски (undo через PixelPatch); smart — знак масштаба +
+   * противоположный поворот (отражение относительно экранной оси, оригинал
+   * не трогается, undo через историю трансформации).
+   */
+  flipLayer(id: string, axis: 'h' | 'v'): boolean {
+    const doc = this.requireDoc()
+    const layer = this.findLayer(id)
+    if (!layer || layer.json.kind !== 'raster') return false
+
+    if (layer.json.smart) {
+      const t = layer.json.smart.transform
+      this.setSmartTransform(
+        id,
+        axis === 'h' ? { sx: -t.sx, rot: -t.rot } : { sy: -t.sy, rot: -t.rot },
+      )
+      return true
+    }
+
+    const w = doc.width
+    const h = doc.height
+    const rect = { x: 0, y: 0, w, h }
+    doc.attachFbo.attach(layer.texture)
+    const pixels = doc.attachFbo.readPixels(0, 0, w, h)
+
+    // Как в Photoshop: отражение вокруг центра содержимого (bbox по альфе),
+    // объект остаётся на месте. Пустой слой — отражать нечего.
+    const bounds = maskBounds(
+      // альфа — каждый 4-й байт
+      (() => {
+        const a = new Uint8Array(w * h)
+        for (let i = 0; i < a.length; i++) a[i] = pixels[i * 4 + 3]!
+        return a
+      })(),
+      w,
+      h,
+    )
+    if (!bounds) return true
+    const bx0 = bounds.x
+    const by0 = bounds.y
+    const bx1 = bounds.x + bounds.w - 1
+    const by1 = bounds.y + bounds.h - 1
+
+    const flip = (src: Uint8Array, chans: number): Uint8Array => {
+      const out = new Uint8Array(src)
+      if (axis === 'v') {
+        const row = w * chans
+        for (let y = by0; y <= by1; y++) {
+          out.set(src.subarray(y * row + bx0 * chans, y * row + (bx1 + 1) * chans),
+            (by1 - (y - by0)) * row + bx0 * chans)
+        }
+      } else {
+        for (let y = by0; y <= by1; y++) {
+          for (let x = bx0; x <= bx1; x++) {
+            const s = (y * w + x) * chans
+            const d = (y * w + (bx1 - (x - bx0))) * chans
+            for (let c = 0; c < chans; c++) out[d + c] = src[s + c]!
+          }
+        }
+      }
+      return out
+    }
+
+    const flipped = flip(pixels, 4)
+    const before = new PixelPatch(rect, pixels)
+    const after = new PixelPatch(rect, flipped)
+    layer.texture.upload(flipped, 0, 0, w, h)
+
+    let beforeMask: PixelPatch | null = null
+    let afterMask: PixelPatch | null = null
+    if (layer.mask) {
+      doc.attachFbo.attach(layer.mask)
+      const mp = doc.attachFbo.readPixels(0, 0, w, h)
+      const mf = flip(mp, 1)
+      beforeMask = new PixelPatch(rect, mp)
+      afterMask = new PixelPatch(rect, mf)
+      layer.mask.upload(mf, 0, 0, w, h)
+    }
+
+    const engine = this
+    const layerId = layer.json.id
+    this.touch(layer)
+    this.history.push({
+      label: 'history.flip',
+      bytes: before.bytes + after.bytes + (beforeMask?.bytes ?? 0) + (afterMask?.bytes ?? 0),
+      undo: () => {
+        engine.uploadPatch(layerId, 'pixels', before)
+        if (beforeMask) engine.uploadPatch(layerId, 'mask', beforeMask)
+      },
+      redo: () => {
+        engine.uploadPatch(layerId, 'pixels', after)
+        if (afterMask) engine.uploadPatch(layerId, 'mask', afterMask)
+      },
+    })
+    this.invalidate()
+    this.emit()
+    return true
+  }
+
   /** Метки истории для панели истории. */
   getHistoryLabels(): { undo: string[]; redo: string[] } {
     return { undo: this.history.allUndoLabels(), redo: this.history.allRedoLabels() }
@@ -796,12 +988,16 @@ export class Engine {
     const add = () => {
       layer.mask = mask
       layer.json.hasMask = true
+      // Версия участвует в ключах кэшей (маски теней): содержимое маски —
+      // часть внешнего вида слоя.
+      this.touch(layer)
       this.invalidate()
     }
     const remove = () => {
       layer.mask = null
       layer.json.hasMask = false
       if (this.maskEditLayerId === id) this.maskEditLayerId = null
+      this.touch(layer)
       this.invalidate()
     }
     add()
@@ -826,11 +1022,13 @@ export class Engine {
       layer.mask = null
       layer.json.hasMask = false
       if (this.maskEditLayerId === id) this.maskEditLayerId = null
+      this.touch(layer)
       this.invalidate()
     }
     const restore = () => {
       layer.mask = mask
       layer.json.hasMask = true
+      this.touch(layer)
       this.invalidate()
     }
     remove()
@@ -2235,10 +2433,16 @@ export class Engine {
       // Наложение цвета — поверх (размытых) пикселей, альфа не меняется.
       srcTex = this.applyColorOverlay(layer.json.styles, srcTex)
 
+      // Кэш масок теней: во время штриха по слою srcTex «мокрый» — без кэша.
+      const styleCache = (slot: string): { id: string; version: number } | undefined =>
+        this.stroke && this.stroke.layerId === layer.json.id
+          ? undefined
+          : { id: `${layer.json.id}:${slot}`, version: layer.version }
+
       // Внешняя тень — под слоем.
       const drop = layer.json.styles?.dropShadow
       if (drop?.enabled) {
-        this.buildShadow(srcTex, maskTex, drop, false)
+        this.buildShadow(srcTex, maskTex, drop, false, styleCache('drop'))
         this.blendOnto(doc.styleColor, opacity, 'normal', null, clipTex)
       }
 
@@ -2258,8 +2462,33 @@ export class Engine {
             ...(glow.spread !== undefined ? { spread: glow.spread } : {}),
           },
           false,
+          styleCache('glow'),
+          'glow',
         )
         this.blendOnto(doc.styleColor, opacity, 'screen', null, clipTex)
+      }
+
+      // Внешняя обводка — под слоем, ближе всех к нему (как в Photoshop):
+      // жёсткая дилатация альфы через spread-механизм, край — smoothstep.
+      const strokeStyle = layer.json.styles?.stroke
+      if (strokeStyle?.enabled && strokeStyle.size >= 1) {
+        this.buildShadow(
+          srcTex,
+          maskTex,
+          {
+            enabled: true,
+            color: strokeStyle.color,
+            opacity: strokeStyle.opacity,
+            distance: 0,
+            angle: 0,
+            size: 0,
+            spread: Math.min(50, Math.max(1, Math.round(strokeStyle.size))),
+          },
+          false,
+          styleCache('stroke'),
+          'stroke',
+        )
+        this.blendOnto(doc.styleColor, opacity, 'normal', null, clipTex)
       }
 
       this.blendOnto(srcTex, opacity, layer.json.blendMode, maskTex, clipTex)
@@ -2277,7 +2506,7 @@ export class Engine {
       // Внутренняя тень — поверх слоя, клип по его альфе.
       const inner = layer.json.styles?.innerShadow
       if (inner?.enabled) {
-        this.buildShadow(srcTex, maskTex, inner, true)
+        this.buildShadow(srcTex, maskTex, inner, true, styleCache('inner'))
         this.blendOnto(doc.styleColor, opacity, 'normal', null, clipTex)
       }
     }
@@ -2485,83 +2714,272 @@ export class Engine {
     return target
   }
 
-  /** Готовит premult-цветную тень слоя в doc.styleColor. */
+  /** Ленивая пара RG32F-скретчей JFA (разрешение поля ≤ ~4 Мп). */
+  private ensureJfa(doc: DocRuntime): NonNullable<DocRuntime['jfa']> {
+    if (doc.jfa) return doc.jfa
+    let factor = 1
+    while ((doc.width / factor) * (doc.height / factor) > 4 * 1024 * 1024) factor *= 2
+    const w = Math.max(1, Math.ceil(doc.width / factor))
+    const h = Math.max(1, Math.ceil(doc.height / factor))
+    const gl = this.ctx.gl
+    const a = new Texture(gl, w, h, 'rg32f')
+    const b = new Texture(gl, w, h, 'rg32f')
+    doc.jfa = { a, b, fbo: new Fbo(gl, a), factor }
+    return doc.jfa
+  }
+
+  /**
+   * Готовит premult-цветную тень слоя в doc.styleColor.
+   *
+   * Форма (shape): 'shadow' — дилатация spread + гауссова мягкость size;
+   * 'glow' — изотропный спад по евклидову расстоянию (ядро spread, спад
+   * size); 'stroke' — жёсткая дилатация spread (size игнорируется).
+   * Дилатация и спад считаются по полю расстояний (JFA) — эффект идёт от
+   * края равномерно во все стороны, включая углы (гаусс+порог в углах
+   * «не дотягивался»). Без EXT_color_buffer_float — старый путь.
+   *
+   * Производительность: R8-маска кэшируется по (версия слоя + геометрия
+   * стиля); большие гаусс-радиусы — на уменьшенном разрешении. Цвет и
+   * непрозрачность в ключ не входят: колоризация — дешёвый проход.
+   */
   private buildShadow(
     srcTex: Texture,
     maskTex: Texture | null,
     style: ShadowStyle,
     inner: boolean,
+    cache?: { id: string; version: number },
+    shape: 'shadow' | 'glow' | 'stroke' = 'shadow',
   ): void {
     const doc = this.requireDoc()
     const gl = this.ctx.gl
     gl.disable(gl.BLEND)
-    const rad = (style.angle * Math.PI) / 180
-    const offX = (Math.cos(rad) * style.distance) / doc.width
-    const offY = (Math.sin(rad) * style.distance) / doc.height
 
-    // 1. Маска тени (альфа со смещением) → styleA.
-    doc.attachFbo.attach(doc.styleA)
-    doc.attachFbo.bind()
-    this.progShadowMask.use()
-    srcTex.bind(0)
-    this.progShadowMask.setInt('uSrc', 0)
-    if (maskTex) {
-      maskTex.bind(1)
-      this.progShadowMask.setInt('uMask', 1)
-    }
-    this.progShadowMask.setInt('uUseMask', maskTex ? 1 : 0)
-    this.progShadowMask.setVec2('uOffset', offX, offY)
-    this.progShadowMask.setInt('uInvert', inner ? 1 : 0)
-    this.progShadowMask.setVec4('uRect', ...FULL_RECT)
-    this.quad.draw()
-
-    // Пинг-понг styleA↔styleB; после пары проходов результат снова в cur.
-    let cur = doc.styleA
-    let other = doc.styleB
-    const gaussPass = (radius: number): void => {
-      this.progGauss.use()
-      this.progGauss.setInt('uTex', 0)
-      this.progGauss.setInt('uRadius', radius)
-      this.progGauss.setVec4('uRect', ...FULL_RECT)
-      doc.attachFbo.attach(other)
-      doc.attachFbo.bind()
-      cur.bind(0)
-      this.progGauss.setVec2('uDir', 1 / doc.width, 0)
-      this.quad.draw()
-      ;[cur, other] = [other, cur]
-      doc.attachFbo.attach(other)
-      doc.attachFbo.bind()
-      cur.bind(0)
-      this.progGauss.setVec2('uDir', 0, 1 / doc.height)
-      this.quad.draw()
-      ;[cur, other] = [other, cur]
-    }
-
-    // 2. «Размер» (spread, px): дилатация маски — размытие + низкий порог
-    //    отодвигают край наружу примерно на spread px (тень плотнеет и растёт).
     const spread = Math.min(50, Math.max(0, Math.round(style.spread ?? 0)))
-    if (spread > 0) {
-      gaussPass(Math.min(100, spread * 2))
-      this.progThreshold.use()
-      this.progThreshold.setInt('uTex', 0)
-      this.progThreshold.setFloat('uThreshold', 0.16)
-      this.progThreshold.setVec4('uRect', ...FULL_RECT)
-      doc.attachFbo.attach(other)
-      doc.attachFbo.bind()
-      cur.bind(0)
-      this.quad.draw()
-      ;[cur, other] = [other, cur]
+    const radius = Math.min(100, Math.max(0, Math.round(style.size)))
+
+    let shadowMask: Texture | null = null
+    let cacheEntry: { tex: Texture; key: string } | undefined
+    if (cache) {
+      const key =
+        `${shape}|${cache.version}|${inner ? 1 : 0}|${style.distance}|${style.angle}|` +
+        `${spread}|${radius}|${maskTex ? 1 : 0}`
+      cacheEntry = doc.styleMaskCache.get(cache.id)
+      if (cacheEntry && cacheEntry.key === key) {
+        shadowMask = cacheEntry.tex
+      } else {
+        if (!cacheEntry) {
+          cacheEntry = { tex: new Texture(gl, doc.width, doc.height, 'r8'), key: '' }
+          doc.styleMaskCache.set(cache.id, cacheEntry)
+        }
+        cacheEntry.key = key
+      }
     }
 
-    // 3. «Размытие» (size, px): гаусс.
-    const radius = Math.min(100, Math.max(0, Math.round(style.size)))
-    if (radius > 0) gaussPass(radius)
+    if (!shadowMask) {
+      const rad = (style.angle * Math.PI) / 180
+      const offX = (Math.cos(rad) * style.distance) / doc.width
+      const offY = (Math.sin(rad) * style.distance) / doc.height
+
+      // 1. Маска тени (альфа со смещением) → styleA.
+      doc.attachFbo.attach(doc.styleA)
+      doc.attachFbo.bind()
+      this.progShadowMask.use()
+      srcTex.bind(0)
+      this.progShadowMask.setInt('uSrc', 0)
+      if (maskTex) {
+        maskTex.bind(1)
+        this.progShadowMask.setInt('uMask', 1)
+      }
+      this.progShadowMask.setInt('uUseMask', maskTex ? 1 : 0)
+      this.progShadowMask.setVec2('uOffset', offX, offY)
+      this.progShadowMask.setInt('uInvert', inner ? 1 : 0)
+      this.progShadowMask.setVec4('uRect', ...FULL_RECT)
+      this.quad.draw()
+
+      // Пинг-понг двух текстур; после каждой пары проходов результат в cur.
+      let cur = doc.styleA
+      let other = doc.styleB
+      let texelW = 1 / doc.width
+      let texelH = 1 / doc.height
+      let factor = 1
+      const copyTo = (src: Texture, dst: Texture): void => {
+        this.progCopy.use()
+        this.progCopy.setInt('uTex', 0)
+        this.progCopy.setVec4('uRect', ...FULL_RECT)
+        doc.attachFbo.attach(dst)
+        doc.attachFbo.bind()
+        src.bind(0)
+        this.quad.draw()
+      }
+      const gaussPass = (r: number): void => {
+        const rr = Math.max(1, Math.round(r / factor))
+        this.progGauss.use()
+        this.progGauss.setInt('uTex', 0)
+        this.progGauss.setInt('uRadius', rr)
+        this.progGauss.setVec4('uRect', ...FULL_RECT)
+        doc.attachFbo.attach(other)
+        doc.attachFbo.bind()
+        cur.bind(0)
+        this.progGauss.setVec2('uDir', texelW, 0)
+        this.quad.draw()
+        ;[cur, other] = [other, cur]
+        doc.attachFbo.attach(other)
+        doc.attachFbo.bind()
+        cur.bind(0)
+        this.progGauss.setVec2('uDir', 0, texelH)
+        this.quad.draw()
+        ;[cur, other] = [other, cur]
+      }
+      const thresholdPass = (): void => {
+        this.progThreshold.use()
+        this.progThreshold.setInt('uTex', 0)
+        this.progThreshold.setFloat('uThreshold', 0.16)
+        this.progThreshold.setVec4('uRect', ...FULL_RECT)
+        doc.attachFbo.attach(other)
+        doc.attachFbo.bind()
+        cur.bind(0)
+        this.quad.draw()
+        ;[cur, other] = [other, cur]
+      }
+
+      // 2. Дилатация/спад. Основной путь — поле расстояний (JFA): эффект
+      //    идёт от края строго во все стороны, включая углы. Гаусс остаётся
+      //    только для мягкости тени (size) и как фолбэк без float-рендера.
+      let oldSpread = spread // дилатация старым способом (гаусс+порог)
+      let blurR = radius // гауссова мягкость после
+      const useDist = this.floatRT && (shape !== 'shadow' || spread > 0)
+      if (useDist) {
+        const fld = this.ensureJfa(doc)
+        // Поле расстояний не зависит от радиусов — кэшируем его отдельно:
+        // тик ползунка размера/spread пересчитывает только форму (1 проход),
+        // а JFA гоняется лишь при изменении содержимого слоя или офсета.
+        const fieldKey = cache
+          ? `${cache.id.split(':')[0]}|${cache.version}|${inner ? 1 : 0}|` +
+            `${style.distance}|${style.angle}|${maskTex ? 1 : 0}`
+          : null
+        let seeds: Texture
+        if (fieldKey && doc.distField && doc.distField.key === fieldKey) {
+          seeds = doc.distField.tex
+        } else {
+          // Инициализация поля из полноразмерной маски (LINEAR-даунскейл).
+          fld.fbo.attach(fld.a)
+          fld.fbo.bind()
+          this.progJfaInit.use()
+          cur.bind(0)
+          this.progJfaInit.setInt('uTex', 0)
+          this.progJfaInit.setVec4('uRect', ...FULL_RECT)
+          this.quad.draw()
+          // Шаги JFA: степени двойки от половины большей стороны до 1.
+          let ja = fld.a
+          let jb = fld.b
+          this.progJfaStep.use()
+          this.progJfaStep.setInt('uTex', 0)
+          this.progJfaStep.setVec2('uTexel', 1 / fld.a.width, 1 / fld.a.height)
+          this.progJfaStep.setVec4('uRect', ...FULL_RECT)
+          let step = 1
+          while (step < Math.max(fld.a.width, fld.a.height)) step *= 2
+          for (step = Math.max(1, step >> 1); step >= 1; step >>= 1) {
+            fld.fbo.attach(jb)
+            fld.fbo.bind()
+            ja.bind(0)
+            this.progJfaStep.setFloat('uStep', step)
+            this.quad.draw()
+            ;[ja, jb] = [jb, ja]
+          }
+          if (fieldKey) {
+            if (!doc.distField) {
+              doc.distField = {
+                tex: new Texture(gl, fld.a.width, fld.a.height, 'rg32f'),
+                key: '',
+              }
+            }
+            // Копия результата в кэш (1 дешёвый проход на разрешении поля).
+            fld.fbo.attach(doc.distField.tex)
+            fld.fbo.bind()
+            this.progCopy.use()
+            ja.bind(0)
+            this.progCopy.setInt('uTex', 0)
+            this.progCopy.setVec4('uRect', ...FULL_RECT)
+            this.quad.draw()
+            doc.distField.key = fieldKey
+            seeds = doc.distField.tex
+          } else {
+            seeds = ja
+          }
+        }
+        // Форма в полном разрешении: r1>r0 — спад свечения, иначе дилатация.
+        const r0 = spread
+        const r1 = shape === 'glow' ? spread + Math.max(radius, 1) : 0
+        doc.attachFbo.attach(other)
+        doc.attachFbo.bind()
+        this.progDistShape.use()
+        seeds.bind(0)
+        cur.bind(1)
+        this.progDistShape.setInt('uSeeds', 0)
+        this.progDistShape.setInt('uMask', 1)
+        this.progDistShape.setFloat('uField', fld.factor)
+        this.progDistShape.setFloat('uR0', r0)
+        this.progDistShape.setFloat('uR1', r1)
+        this.progDistShape.setVec4('uRect', ...FULL_RECT)
+        this.quad.draw()
+        ;[cur, other] = [other, cur]
+        oldSpread = 0
+        if (shape !== 'shadow') blurR = 0 // спад/жёсткий край уже посчитаны
+      }
+
+      // Большие гаусс-радиусы — на уменьшенном разрешении (см. applyLayerBlur):
+      // blur R на 1/f разрешении с радиусом R/f визуально неотличим.
+      const maxR = Math.max(oldSpread * 2, blurR)
+      factor = maxR > 12 ? Math.min(8, 2 ** Math.ceil(Math.log2(maxR / 12))) : 1
+      if (factor > 1) {
+        // Даунскейл каскадом половинок; скретчи blurSmall общие с размытиями
+        // слоя (к этому моменту applyLayerBlur уже скопировал результат).
+        let small: Texture = cur
+        for (let f = 2; f <= factor; f *= 2) {
+          let p = doc.blurSmall.get(f)
+          if (!p) {
+            const sw = Math.max(1, Math.ceil(doc.width / f))
+            const sh = Math.max(1, Math.ceil(doc.height / f))
+            p = { a: new Texture(gl, sw, sh), b: new Texture(gl, sw, sh) }
+            doc.blurSmall.set(f, p)
+          }
+          copyTo(small, p.a)
+          small = p.a
+        }
+        const pair = doc.blurSmall.get(factor)!
+        cur = pair.a
+        other = pair.b
+        texelW = 1 / pair.a.width
+        texelH = 1 / pair.a.height
+      }
+
+      // Фолбэк-дилатация (без float-рендера): размытие + низкий порог.
+      if (oldSpread > 0) {
+        gaussPass(Math.min(100, oldSpread * 2))
+        thresholdPass()
+      }
+
+      // 3. «Размытие» (size, px): гаусс.
+      if (blurR > 0) gaussPass(blurR)
+
+      if (factor > 1) {
+        // Апскейл (linear) обратно в полноразмерный скретч.
+        copyTo(cur, doc.styleB)
+        cur = doc.styleB
+      }
+      if (cacheEntry) {
+        copyTo(cur, cacheEntry.tex)
+        shadowMask = cacheEntry.tex
+      } else {
+        shadowMask = cur
+      }
+    }
 
     // 4. Колоризация → styleColor (premult RGBA).
     doc.attachFbo.attach(doc.styleColor)
     doc.attachFbo.bind()
     this.progShadowColor.use()
-    cur.bind(0)
+    shadowMask.bind(0)
     srcTex.bind(1)
     this.progShadowColor.setInt('uMaskTex', 0)
     this.progShadowColor.setInt('uSrc', 1)
@@ -2889,6 +3307,16 @@ export class Engine {
       pair.b.dispose()
     }
     doc.blurSmall.clear()
+    for (const e of doc.styleMaskCache.values()) e.tex.dispose()
+    doc.styleMaskCache.clear()
+    if (doc.jfa) {
+      doc.jfa.a.dispose()
+      doc.jfa.b.dispose()
+      doc.jfa.fbo.dispose()
+      doc.jfa = null
+    }
+    doc.distField?.tex.dispose()
+    doc.distField = null
     doc.composite = doc.accumA.texture
   }
 
@@ -3056,6 +3484,16 @@ export class Engine {
       pair.a.dispose()
       pair.b.dispose()
     }
+    for (const e of doc.styleMaskCache.values()) e.tex.dispose()
+    doc.styleMaskCache.clear()
+    if (doc.jfa) {
+      doc.jfa.a.dispose()
+      doc.jfa.b.dispose()
+      doc.jfa.fbo.dispose()
+      doc.jfa = null
+    }
+    doc.distField?.tex.dispose()
+    doc.distField = null
     doc.accumA.dispose()
     doc.accumB.dispose()
     doc.scratch.dispose()

@@ -17,10 +17,15 @@ drives the editor through MCP. UI languages: Russian (primary) and English.
 - **Per-fragment text styles**: select part of the text and give it its
   own font, size, color and weight, just like in Photoshop.
 - Layer masks, clipping masks, 8 blend modes.
+- Flip a layer horizontally/vertically (right-click the layer) — around
+  the content center, just like Photoshop.
 - Selections: rectangle, ellipse, lasso, magic wand, selection brushes —
   with live feather and expand/contract sliders.
-- Layer styles: drop/inner shadow, outer glow, color overlay, Gaussian
-  blur, motion blur (follows the object's rotation).
+- Layer styles: drop/inner shadow, outer glow, **outer stroke**, color
+  overlay, Gaussian blur, motion blur (follows the object's rotation).
+  Stroke, glow and shadow spread are built from a Euclidean distance
+  field — they extend evenly from the edge in every direction,
+  corners included.
 - Pressure-sensitive brushes and eraser; imports Krita (`.kpp`) and
   Photoshop (`.abr`) brushes.
 - Crop tool and on-the-fly canvas resizing.
@@ -32,13 +37,19 @@ drives the editor through MCP. UI languages: Russian (primary) and English.
 - PSD and ORA import; PNG / JPEG / WebP / ORA export.
 
 ### AI (all optional — the editor is fully functional without it)
+- **Background removal**: right-click a layer → "Remove background" — a
+  local neural network (ISNet, ONNX Runtime), fully offline, no Python
+  needed, the model ships with the app. For smart layers the background
+  is removed from the original (lossless transforms); undo with Ctrl+Z.
 - **SAM 2.1**: click an object to get a clean selection or a layer mask.
   Runs locally (CUDA or CPU), no internet required.
 - **polza.ai** (API key required): image generation (Nano Banana,
   Seedream, GPT Image, Flux, Grok, Qwen and more), upscaling, and
   selection-based "remove object" / "replace object" — results are
-  inserted automatically as new layers. The job queue survives restarts;
-  per-job cost is displayed.
+  inserted automatically as new layers. The "Photobash" 🎬 button
+  flattens everything visible into one image and lets the model rebuild
+  it into a coherent scene (unified lighting, camera, materials).
+  The job queue survives restarts; per-job cost is displayed.
 - **AI assistant**: a built-in terminal running Claude Code connected to
   the editor via MCP (27 tools). Ask in plain language — it selects,
   generates, paints and saves; every edit is undoable with Ctrl+Z.

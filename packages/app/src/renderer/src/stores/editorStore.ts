@@ -52,6 +52,8 @@ interface EditorState extends EngineSnapshot {
   fileName: string | null
   dirty: boolean
   toast: string | null
+  /** Слой, на котором идёт удаление фона (блокирует повторный запуск). */
+  bgRemovalLayerId: string | null
   /** Библиотека кистей. */
   presets: BrushPreset[]
   activePresetId: string
@@ -70,6 +72,7 @@ interface EditorState extends EngineSnapshot {
   setFileInfo: (path: string | null, name: string | null, dirty: boolean) => void
   setDirty: (dirty: boolean) => void
   setToast: (msg: string | null) => void
+  setBgRemovalLayerId: (id: string | null) => void
   setPresets: (presets: BrushPreset[]) => void
   applyPreset: (id: string) => void
   syncFromEngine: (snap: EngineSnapshot) => void
@@ -102,6 +105,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   fileName: null,
   dirty: false,
   toast: null,
+  bgRemovalLayerId: null,
   presets: [],
   activePresetId: 'builtin-round',
 
@@ -119,6 +123,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   setFileInfo: (filePath, fileName, dirty) => set({ filePath, fileName, dirty }),
   setDirty: (dirty) => set({ dirty }),
   setToast: (toast) => set({ toast }),
+  setBgRemovalLayerId: (bgRemovalLayerId) => set({ bgRemovalLayerId }),
   setPresets: (presets) => set({ presets }),
   applyPreset: (id) =>
     set((s) => {

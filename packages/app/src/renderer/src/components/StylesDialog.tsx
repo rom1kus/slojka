@@ -6,12 +6,14 @@ import {
   DEFAULT_GLOW,
   DEFAULT_MOTION_BLUR,
   DEFAULT_SHADOW,
+  DEFAULT_STROKE,
   type BlurStyle,
   type ColorOverlayStyle,
   type GlowStyle,
   type LayerStyles,
   type MotionBlurStyle,
   type ShadowStyle,
+  type StrokeStyle,
 } from '@slojka/shared'
 import { editor } from '../controller/EditorController'
 import { useEditorStore } from '../stores/editorStore'
@@ -170,6 +172,67 @@ function GlowEditor(props: {
               onChange={(e) => set({ spread: Number(e.target.value) })}
             />
             <span className="opt-value">{Math.round(v.spread ?? 0)}px</span>
+          </div>
+        </>
+      )}
+    </fieldset>
+  )
+}
+
+function StrokeEditor(props: {
+  title: string
+  value: StrokeStyle | undefined
+  onChange: (v: StrokeStyle | undefined) => void
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const v = props.value
+  const set = (patch: Partial<StrokeStyle>): void =>
+    props.onChange({ ...(v ?? DEFAULT_STROKE), ...patch })
+
+  return (
+    <fieldset className="style-group">
+      <legend>
+        <label className="opt-check">
+          <input
+            type="checkbox"
+            checked={v?.enabled ?? false}
+            onChange={(e) =>
+              e.target.checked ? set({ enabled: true }) : v && props.onChange({ ...v, enabled: false })
+            }
+          />
+          {props.title}
+        </label>
+      </legend>
+      {v?.enabled && (
+        <>
+          <div className="dialog-row">
+            <span>{t('styles.color')}</span>
+            <input
+              type="color"
+              className="color-input"
+              value={v.color}
+              onChange={(e) => set({ color: e.target.value })}
+            />
+            <span>{t('styles.opacity')}</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={v.opacity}
+              onChange={(e) => set({ opacity: Number(e.target.value) })}
+            />
+          </div>
+          <div className="dialog-row">
+            <span>{t('styles.strokeWidth')}</span>
+            <input
+              type="range"
+              min={1}
+              max={50}
+              value={Math.round(v.size)}
+              onChange={(e) => set({ size: Number(e.target.value) })}
+            />
+            <span className="opt-value">{Math.round(v.size)}px</span>
           </div>
         </>
       )}
@@ -401,6 +464,11 @@ export function StylesDialog(props: { layerId: string; onClose: () => void }): R
           title={t('styles.outerGlow')}
           value={styles?.outerGlow}
           onChange={(outerGlow) => change({ outerGlow })}
+        />
+        <StrokeEditor
+          title={t('styles.stroke')}
+          value={styles?.stroke}
+          onChange={(stroke) => change({ stroke })}
         />
         <ColorOverlayEditor
           title={t('styles.colorOverlay')}

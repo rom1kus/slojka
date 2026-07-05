@@ -142,6 +142,7 @@ const api = {
     ipcRenderer.send('smoke:report', info)
   },
   isSmoke: process.argv.includes('--slojka-smoke'),
+  isSmokeRemoveBg: process.argv.includes('--slojka-smoke-removebg'),
 }
 
 export type SlojkaApi = typeof api

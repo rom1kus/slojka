@@ -11,15 +11,18 @@ export class Texture {
     private gl: WebGL2RenderingContext,
     readonly width: number,
     readonly height: number,
-    /** gl.RGBA8 (слои) или gl.R8 (маски, буфер штриха). */
-    readonly format: 'rgba8' | 'r8' = 'rgba8',
+    /** gl.RGBA8 (слои), gl.R8 (маски, буфер штриха) или gl.RG32F (поле JFA). */
+    readonly format: 'rgba8' | 'r8' | 'rg32f' = 'rgba8',
   ) {
     const tex = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, tex)
-    const internal = format === 'rgba8' ? gl.RGBA8 : gl.R8
+    const internal = format === 'rgba8' ? gl.RGBA8 : format === 'r8' ? gl.R8 : gl.RG32F
     gl.texStorage2D(gl.TEXTURE_2D, 1, internal, width, height)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    // 32F нефильтруем без отдельного расширения — только NEAREST
+    // (JFA и так сэмплирует точечно).
+    const filter = format === 'rg32f' ? gl.NEAREST : gl.LINEAR
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
     this.tex = tex

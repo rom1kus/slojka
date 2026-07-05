@@ -200,7 +200,10 @@ void main() {
   float cs = cos(-uRot);
   float sn = sin(-uRot);
   v = vec2(cs * v.x - sn * v.y, sn * v.x + cs * v.y);
-  v /= max(uScale, vec2(1e-4));
+  // Знак масштаба — это зеркало, он сохраняется; защищаемся только от нуля.
+  vec2 sc = vec2(uScale.x < 0.0 ? -1.0 : 1.0, uScale.y < 0.0 ? -1.0 : 1.0)
+    * max(abs(uScale), vec2(1e-4));
+  v /= sc;
   vec2 s = v + uSrcSize * 0.5;
   vec2 uv = s / uSrcSize;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
@@ -227,7 +230,10 @@ void main() {
   float cs = cos(-uRot);
   float sn = sin(-uRot);
   v = vec2(cs * v.x - sn * v.y, sn * v.x + cs * v.y);
-  v /= max(uScale, vec2(1e-4));
+  // Знак масштаба — это зеркало, он сохраняется; защищаемся только от нуля.
+  vec2 sc = vec2(uScale.x < 0.0 ? -1.0 : 1.0, uScale.y < 0.0 ? -1.0 : 1.0)
+    * max(abs(uScale), vec2(1e-4));
+  v /= sc;
   vec2 uv = (v + uCenter) / uDocSize;
   if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) discard;
   outColor = texture(uTex, uv);
@@ -491,5 +497,80 @@ void main() {
   if (!boundary) discard;
   float stripe = step(4.0, mod(gl_FragCoord.x + gl_FragCoord.y + uTime * 20.0, 8.0));
   outColor = vec4(vec3(stripe), 1.0);
+}
+`
+
+/**
+ * JFA (jump flooding) — евклидово поле расстояний до объекта, чтобы
+ * обводка/дилатация/свечение шли строго от края во все стороны, включая
+ * углы (гаусс+порог в углах «не дотягивался»: масса размытия там вчетверо
+ * меньше). Инициализация: пиксель маски > 0.5 — сам себе ближайший seed.
+ * Рендер в RG32F (координаты seed в пикселях поля).
+ */
+export const FRAG_JFA_INIT = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform sampler2D uTex; // R8-маска (полное разрешение, LINEAR-даунскейл)
+void main() {
+  float v = texture(uTex, vUv).r;
+  outColor = v > 0.5 ? vec4(gl_FragCoord.xy, 0.0, 1.0) : vec4(-1e6, -1e6, 0.0, 1.0);
+}
+`
+
+/** Шаг JFA: из 9 соседей на расстоянии uStep берём ближайший seed. */
+export const FRAG_JFA_STEP = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform sampler2D uTex; // RG32F seeds
+uniform vec2 uTexel;    // 1/размер поля
+uniform float uStep;    // шаг в пикселях поля
+void main() {
+  vec2 p = gl_FragCoord.xy;
+  vec2 best = vec2(-1e6);
+  float bestD = 1e20;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec2 uv = vUv + vec2(float(dx), float(dy)) * uStep * uTexel;
+      if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) continue;
+      vec2 s = texture(uTex, uv).rg;
+      if (s.x < -1e5) continue;
+      vec2 dv = p - s;
+      float d = dot(dv, dv);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+  }
+  outColor = vec4(best, 0.0, 1.0);
+}
+`
+
+/**
+ * Форма из поля расстояний (полное разрешение; seeds — в пикселях поля,
+ * uField — размер пикселя поля в док-px). uR1 > uR0 — свечение: 1 до uR0,
+ * гладкий спад к 0 на uR1; иначе — дилатация с жёстким краем на uR0
+ * (1px сглаживание). Исходная маска сохраняет свой мягкий край через max.
+ */
+export const FRAG_DIST_SHAPE = /* glsl */ `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 outColor;
+uniform sampler2D uSeeds; // RG32F (NEAREST)
+uniform sampler2D uMask;  // исходная R8-маска (полное разрешение)
+uniform float uField;     // док-px на один пиксель поля
+uniform float uR0;
+uniform float uR1;
+void main() {
+  vec2 s = texture(uSeeds, vUv).rg;
+  float m = texture(uMask, vUv).r;
+  float d = s.x < -1e5 ? 1e6 : length(gl_FragCoord.xy - s * uField);
+  float v;
+  if (uR1 > uR0) {
+    float t = clamp((uR1 - d) / max(uR1 - uR0, 1e-4), 0.0, 1.0);
+    v = t * t * (3.0 - 2.0 * t);
+  } else {
+    v = clamp(uR0 + 0.5 - d, 0.0, 1.0);
+  }
+  outColor = vec4(max(v, m), 0.0, 0.0, 1.0);
 }
 `

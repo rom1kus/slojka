@@ -14,6 +14,7 @@ import {
   savePolzaKey,
   submitGenerate,
   submitObjectEdit,
+  submitPhotobash,
   submitUpscale,
 } from '../io/polzaOps'
 import { PromptLibrary } from './PromptLibrary'
@@ -172,6 +173,13 @@ export function AiPanel(): React.JSX.Element {
 
               {hasDoc && (
                 <div className="dialog-row">
+                  <button
+                    disabled={s.busy}
+                    title={t('polza.photobashHint')}
+                    onClick={() => void submitPhotobash()}
+                  >
+                    🎬 {t('polza.photobash')}
+                  </button>
                   <button
                     disabled={s.busy || !hasSelection}
                     title={t('polza.removeHint')}

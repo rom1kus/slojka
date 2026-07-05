@@ -76,6 +76,7 @@ export function App(): React.JSX.Element {
   const glRenderer = useEditorStore((s) => s.glRenderer)
   const glSoftware = useEditorStore((s) => s.glSoftware)
   const zoom = useEditorStore((s) => s.zoom)
+  const bgRemovalLayerId = useEditorStore((s) => s.bgRemovalLayerId)
   const hasDoc = useEditorStore((s) => s.docJson !== null)
   const setNewDocOpen = useEditorStore((s) => s.setNewDocOpen)
   const setTool = useEditorStore((s) => s.setTool)
@@ -484,6 +485,44 @@ export function App(): React.JSX.Element {
         const stylesKept = pasted?.styles?.gaussianBlur?.enabled === true
         clipboardHotkeys = { before, after, stylesKept, pass: after === before + 1 && stylesKept }
       }
+      // Удаление фона сквозь весь стек (протокол → wasm → модель → слой):
+      // долгий этап, включается переменной SLOJKA_SMOKE_REMOVEBG=1.
+      let removeBgTest: unknown = 'skipped'
+      if (window.slojka.isSmoke && window.slojka.isSmokeRemoveBg && editor.attached) {
+        try {
+          const engine = editor.engineForIo
+          engine.newDocument(256, 256, 'transparent')
+          // Синтетика: яркий круг в центре на светлом фоне.
+          const cnv = new OffscreenCanvas(256, 256)
+          const cctx = cnv.getContext('2d')!
+          cctx.fillStyle = '#e8e8e8'
+          cctx.fillRect(0, 0, 256, 256)
+          cctx.fillStyle = '#c03030'
+          cctx.beginPath()
+          cctx.arc(128, 128, 64, 0, Math.PI * 2)
+          cctx.fill()
+          const bmp = await createImageBitmap(cnv)
+          const rbId = engine.addImageLayer(bmp, 'rb', 'bottom')!
+          // Даём стору синхронизироваться — removeLayerBackground читает docJson.
+          await new Promise((r) => setTimeout(r, 100))
+          const { removeLayerBackground } = await import('./tools/removeBgTool')
+          const t0 = performance.now()
+          await removeLayerBackground(rbId)
+          const ms = Math.round(performance.now() - t0)
+          const comp = engine.readComposite()
+          const at = (x: number, y: number): number => comp.pixels[(y * 256 + x) * 4 + 3]!
+          const cornerAlpha = at(8, 8)
+          const centerAlpha = at(128, 128)
+          removeBgTest = {
+            ms,
+            cornerAlpha,
+            centerAlpha,
+            pass: cornerAlpha < 30 && centerAlpha > 200,
+          }
+        } catch (e) {
+          removeBgTest = { pass: false, error: String(e) }
+        }
+      }
       const info = collectGlInfo()
       const selftest = runEngineSelfTest()
       window.slojka.smokeReport({
@@ -492,6 +531,7 @@ export function App(): React.JSX.Element {
         slojkaRoundTrip,
         clipboardHotkeys,
         smartTest,
+        removeBgTest,
       })
     })()
   }, [])
@@ -521,6 +561,12 @@ export function App(): React.JSX.Element {
         {hasDoc && (
           <span>
             {t('status.zoom')}: {Math.round(zoom * 100)}%
+          </span>
+        )}
+        {bgRemovalLayerId && (
+          <span className="busy-chip">
+            <span className="spinner" />
+            {t('layers.ctxRemoveBgBusy')}
           </span>
         )}
         <span className="spacer" />
