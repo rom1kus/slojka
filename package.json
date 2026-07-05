@@ -1,0 +1,28 @@
+{
+  "name": "slojka-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Slojka (Слойка) — AI-first графический редактор",
+  "license": "GPL-3.0-only",
+  "author": "Black Triangle",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HelpFreedom/slojka.git"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @slojka/app",
+    "build": "npm run build -w @slojka/app",
+    "smoke": "npm run smoke -w @slojka/app",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "audit": "npm audit --workspaces --include-workspace-root",
+    "dist": "npm run bundle -w @slojka/mcp-server && npm run dist -w @slojka/app"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}

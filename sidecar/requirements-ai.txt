@@ -1,0 +1,7 @@
+# SAM 2.1: PyTorch CUDA 12.4 (~2.5 ГБ) + официальный пакет sam2 с PyPI
+# (1.1.0 соответствует SAM 2.1). Ставится ТОЛЬКО по явному согласию
+# пользователя в настройках.
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.5.1+cu124
+torchvision==0.20.1+cu124
+sam2==1.1.0

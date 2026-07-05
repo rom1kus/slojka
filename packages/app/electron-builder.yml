@@ -1,0 +1,51 @@
+appId: ai.slojka.app
+productName: Slojka
+executableName: slojka
+copyright: © 2026
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**
+  - package.json
+
+asarUnpack:
+  - '**/node_modules/node-pty/**'
+
+extraResources:
+  # Python-sidecar едет исходниками: venv собирается на машине пользователя.
+  - from: ../../sidecar
+    to: sidecar
+    filter:
+      - '**/*.py'
+      - 'requirements-*.txt'
+  # MCP-сервер — один заранее забандленный файл.
+  - from: ../mcp-server/dist/index.cjs
+    to: mcp-server/index.cjs
+
+linux:
+  target:
+    - AppImage
+  category: Graphics
+  icon: build/icon.png
+  synopsis: AI-first графический редактор
+  desktop:
+    entry:
+      Name: Слойка
+      Comment: AI-first графический редактор
+
+# Сборка: npm run dist -- --win (на Windows-машине или через wine).
+# icon.ico не обязателен: без него electron-builder возьмёт иконку по умолчанию.
+win:
+  target:
+    - nsis
+  icon: build/icon.png
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Слойка
+
+npmRebuild: true
