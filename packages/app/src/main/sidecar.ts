@@ -259,6 +259,7 @@ class SidecarManager {
         cwd: sidecarSrcDir(),
         env: {
           ...process.env,
+          PYTHONUTF8: '1',
           SLOJKA_TOKEN: this.token,
           PYTHONPATH: sidecarSrcDir(),
           // Обе стороны (main и python) обязаны видеть одни и те же
@@ -388,7 +389,12 @@ class SidecarManager {
     onLine?: (l: string) => void,
   ): Promise<{ code: number; output: string }> {
     return new Promise((resolve) => {
-      const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      // PYTHONUTF8=1: на Windows с системной кодировкой cp1251 pip падает
+      // UnicodeDecodeError на любом UTF-8 вне ASCII (файлы, пути, вывод).
+      const p = spawn(cmd, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, PYTHONUTF8: '1' },
+      })
       let output = ''
       const feed = (d: Buffer): void => {
         // Хвост вывода — в лог и в сообщение об ошибке (диагностика на

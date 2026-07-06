@@ -1,6 +1,8 @@
-# SAM 2.1: PyTorch CUDA 12.4 (~2.5 ГБ) + официальный пакет sam2 с PyPI
-# (1.1.0 соответствует SAM 2.1). Ставится ТОЛЬКО по явному согласию
-# пользователя в настройках.
+# SAM 2.1: PyTorch CUDA 12.4 (~2.5 GB) + the official sam2 package from
+# PyPI (1.1.0 corresponds to SAM 2.1). Installed ONLY after explicit user
+# consent in the settings dialog.
+# ASCII only: pip decodes this file with the system locale (cp1251 on
+# Russian Windows), non-ASCII bytes crash it with UnicodeDecodeError.
 --extra-index-url https://download.pytorch.org/whl/cu124
 torch==2.5.1+cu124
 torchvision==0.20.1+cu124

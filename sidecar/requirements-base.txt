@@ -1,6 +1,8 @@
-# Базовые зависимости sidecar (лёгкие, ~15 МБ): ставятся при включении
-# локального ИИ. Torch/SAM ставятся отдельно (requirements-ai.txt).
-# Версии проверены pip-audit 2026-07-02: 0 известных уязвимостей.
+# Base sidecar dependencies (light, ~15 MB): installed when local AI is
+# enabled. Torch/SAM are installed separately (requirements-ai.txt).
+# Versions checked with pip-audit 2026-07-02: 0 known vulnerabilities.
+# ASCII only: pip decodes this file with the system locale (cp1251 on
+# Russian Windows), non-ASCII bytes crash it with UnicodeDecodeError.
 fastapi>=0.139
 uvicorn>=0.49
 starlette>=1.3.1
