@@ -50,5 +50,8 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   shortcutName: Слойка
+  # Тихая доустановка VC++ Redistributable и Python 3.11 при их отсутствии
+  # (установщики скачивает tools/fetch-win-prereqs.mjs в build/win-prereqs).
+  include: build/installer.nsh
 
 npmRebuild: true

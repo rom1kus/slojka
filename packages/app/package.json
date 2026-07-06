@@ -11,7 +11,8 @@
     "smoke": "electron-vite build && electron . --smoke",
     "rebuild-native": "electron-rebuild -f -o node-pty",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "dist": "node ../../tools/prepare-imgly-data.mjs && electron-vite build && electron-builder --linux"
+    "dist": "node ../../tools/prepare-imgly-data.mjs && electron-vite build && electron-builder --linux",
+    "dist:win": "node ../../tools/prepare-imgly-data.mjs && node ../../tools/fetch-win-prereqs.mjs && electron-vite build && electron-builder --win"
   },
   "dependencies": {
     "@slojka/engine": "*",

@@ -3,6 +3,7 @@ out/
 dist/
 release/
 packages/app/build/imgly/
+packages/app/build/win-prereqs/
 *.log
 .DS_Store
 .env
