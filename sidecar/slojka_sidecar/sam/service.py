@@ -62,26 +62,47 @@ MODEL_CFGS = {
 }
 
 
+_import_check: Any = "unchecked"
+
+
 def _torch_import_error() -> Optional[str]:
-    """None — torch/sam2 импортируются; иначе текст ошибки.
+    """None — torch/sam2 импортируются; иначе текст первой честной ошибки.
 
-    Ловим любую ошибку, не только ImportError: на Windows torch при
-    нехватке системных DLL кидает OSError ([WinError 126] fbgemm.dll и
-    т.п.) — раньше она пролетала до FastAPI и превращалась в голый 500.
+    Проверка идёт в ЧИСТОМ ПОДПРОЦЕССЕ: неудачный import torch оставляет
+    в процессе полузагруженные C-расширения, и повторные попытки в том же
+    процессе дают ложные «partially initialized module 'torch'» вместо
+    настоящей причины. Результат кэшируется (после установки пакетов main
+    перезапускает sidecar — кэш всегда честный). Ловим любую ошибку, не
+    только ImportError: на Windows при нехватке системных DLL это OSError
+    ([WinError 126] fbgemm.dll и т.п.).
     """
-    try:
-        import torch  # noqa: F401
-        import sam2  # noqa: F401
+    global _import_check
+    if _import_check != "unchecked":
+        return _import_check
+    import subprocess
+    import sys
 
-        return None
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", "import torch, sam2"],
+            capture_output=True,
+            text=True,
+            timeout=300,  # первый import torch с холодным диском/антивирусом долгий
+        )
+        if proc.returncode == 0:
+            _import_check = None
+        else:
+            lines = (proc.stderr or "").strip().splitlines()
+            err = lines[-1] if lines else f"код {proc.returncode}"
+            if "WinError 126" in err or "fbgemm" in err or "c10" in err:
+                err += (
+                    " — похоже, не хватает Microsoft Visual C++ Redistributable (x64):"
+                    " установите его с сайта Microsoft и перезапустите редактор."
+                )
+            _import_check = err
     except Exception as e:  # noqa: BLE001
-        err = str(e)
-        if "WinError 126" in err or "fbgemm" in err or "c10" in err:
-            err += (
-                " — похоже, не хватает Microsoft Visual C++ Redistributable (x64):"
-                " установите его с сайта Microsoft и перезапустите редактор."
-            )
-        return err
+        _import_check = str(e)
+    return _import_check
 
 
 def _torch_available() -> bool:
@@ -154,9 +175,12 @@ class SamService:
             if not ckpt.exists():
                 raise HTTPException(409, "чекпойнт не скачан (POST /sam/download)")
 
-            import torch
-            from sam2.build_sam import build_sam2
-            from sam2.sam2_image_predictor import SAM2ImagePredictor
+            try:
+                import torch
+                from sam2.build_sam import build_sam2
+                from sam2.sam2_image_predictor import SAM2ImagePredictor
+            except Exception as e:  # noqa: BLE001 — текстом, а не голым 500
+                raise HTTPException(409, f"torch/sam2 не импортируются: {e}")
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
             model = build_sam2(MODEL_CFGS[req.model_size], str(ckpt), device=device)

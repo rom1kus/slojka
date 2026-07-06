@@ -336,6 +336,18 @@ class SidecarManager {
     }
   }
 
+  /**
+   * Перезапуск с чистым процессом Python. Нужен после установки пакетов:
+   * неудачные попытки import torch до установки оставляют в старом
+   * процессе полузагруженные C-расширения («partially initialized module»),
+   * плюс сбрасывается кэш проверки импорта.
+   */
+  async restart(): Promise<void> {
+    this.stop()
+    await new Promise((r) => setTimeout(r, 800))
+    await this.start()
+  }
+
   stop(): void {
     this.state = 'absent'
     this.stopHealth()
@@ -494,6 +506,9 @@ export function registerAiIpc(getWin: () => BrowserWindow | null): void {
 
   ipcMain.handle('ai:install-sam', async (_e, size: string) => {
     await sidecar.installSam()
+    // Свежий процесс: см. restart(). Без него загрузка модели после
+    // установки падала на «отравленном» import torch.
+    await sidecar.restart()
     await sidecar.downloadCheckpoint(size)
     await sidecar.proxy('/sam/load', { model_size: size })
   })

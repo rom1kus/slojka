@@ -61,7 +61,10 @@ drives the editor through MCP. UI languages: Russian (primary) and English.
 See the [Releases](../../releases) page:
 - **Linux**: `Slojka-x.y.z.AppImage` — make it executable
   (`chmod +x`) and run;
-- **Windows**: `Slojka-Setup-x.y.z.exe` — installer.
+- **Windows**: `Slojka-Setup-x.y.z.exe` — installer (installs Python 3.11
+  and the VC++ Redistributable automatically if missing). The app is not
+  code-signed, so SmartScreen will warn you — click "More info" →
+  "Run anyway".
 
 ### From source
 Requires Node.js ≥ 20.19.
