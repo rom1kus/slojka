@@ -97,7 +97,7 @@ class SidecarManager {
   async baseInstalled(): Promise<boolean> {
     try {
       await access(venvBin('python'))
-      const code = await this.run(venvBin('python'), ['-c', 'import fastapi, uvicorn, PIL'])
+      const { code } = await this.run(venvBin('python'), ['-c', 'import fastapi, uvicorn, PIL'])
       return code === 0
     } catch {
       return false
@@ -115,9 +115,11 @@ class SidecarManager {
       await this.runOrThrow(python, ['-m', 'venv', venvDir()], 'создание venv')
 
       this.progress({ stage: 'pip-base', message: 'Установка базовых зависимостей (~15 МБ)…' })
+      // python -m pip, а не pip.exe: exe-лаунчер pip на Windows ломается
+      // на путях с пробелами/кириллицей («Fatal error in launcher»).
       await this.runOrThrow(
-        venvBin('pip'),
-        ['install', '--no-input', '-r', join(sidecarSrcDir(), 'requirements-base.txt')],
+        venvBin('python'),
+        ['-m', 'pip', 'install', '--no-input', '-r', join(sidecarSrcDir(), 'requirements-base.txt')],
         'установка базовых зависимостей',
         (line) => this.progress({ stage: 'pip-base', message: line }),
       )
@@ -165,8 +167,8 @@ class SidecarManager {
   async installSam(): Promise<void> {
     this.progress({ stage: 'pip-ai', message: 'Установка PyTorch + SAM 2.1 (~2.5 ГБ)…' })
     await this.runOrThrow(
-      venvBin('pip'),
-      ['install', '--no-input', '-r', join(sidecarSrcDir(), 'requirements-ai.txt')],
+      venvBin('python'),
+      ['-m', 'pip', 'install', '--no-input', '-r', join(sidecarSrcDir(), 'requirements-ai.txt')],
       'установка torch/sam2',
       (line) => this.progress({ stage: 'pip-ai', message: line }),
     )
@@ -380,17 +382,25 @@ class SidecarManager {
     this.healthTimer = null
   }
 
-  private run(cmd: string, args: string[], onLine?: (l: string) => void): Promise<number> {
+  private run(
+    cmd: string,
+    args: string[],
+    onLine?: (l: string) => void,
+  ): Promise<{ code: number; output: string }> {
     return new Promise((resolve) => {
       const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      let output = ''
       const feed = (d: Buffer): void => {
+        // Хвост вывода — в лог и в сообщение об ошибке (диагностика на
+        // чужих машинах, где консоли не видно).
+        output = (output + d.toString()).slice(-16_000)
         const line = d.toString().trim().split('\n').at(-1)?.trim()
         if (line && onLine) onLine(line.slice(0, 120))
       }
       p.stdout?.on('data', feed)
       p.stderr?.on('data', feed)
-      p.on('error', () => resolve(-1))
-      p.on('exit', (code) => resolve(code ?? -1))
+      p.on('error', (e) => resolve({ code: -1, output: `${output}\n[spawn] ${String(e)}` }))
+      p.on('exit', (code) => resolve({ code: code ?? -1, output }))
     })
   }
 
@@ -400,8 +410,18 @@ class SidecarManager {
     what: string,
     onLine?: (l: string) => void,
   ): Promise<void> {
-    const code = await this.run(cmd, args, onLine)
-    if (code !== 0) throw new Error(`Не удалось: ${what} (код ${code})`)
+    const { code, output } = await this.run(cmd, args, onLine)
+    // Полный лог шага — рядом с данными; при ошибке путь показывается
+    // пользователю, а последние строки вывода попадают в сообщение.
+    const logPath = join(dataDir(), 'bootstrap.log')
+    const header = `\n===== ${new Date().toISOString()} | ${what} | код ${code}\n$ ${cmd} ${args.join(' ')}\n`
+    await writeFile(logPath, header + output, { flag: 'a' }).catch(() => undefined)
+    if (code !== 0) {
+      const tail = output.trim().split('\n').slice(-4).join('\n').slice(-500)
+      throw new Error(
+        `Не удалось: ${what} (код ${code})\n${tail}\n\nПолный лог: ${logPath}`,
+      )
+    }
   }
 }
 
