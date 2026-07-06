@@ -272,7 +272,14 @@ class SidecarManager {
     this.proc = proc
     void writeFile(join(dataDir(), 'sidecar.pid'), String(proc.pid ?? 0)).catch(() => undefined)
 
-    proc.stderr?.on('data', (d: Buffer) => console.warn('[sidecar]', d.toString().trim()))
+    // stderr — в файл: на Windows консоли нет, а трейсбеки python нужны
+    // для диагностики (см. подсказку в proxy()). Новая сессия — новый лог.
+    const logPath = join(dataDir(), 'sidecar.log')
+    void writeFile(logPath, `[запуск ${new Date().toISOString()}]\n`).catch(() => undefined)
+    proc.stderr?.on('data', (d: Buffer) => {
+      console.warn('[sidecar]', d.toString().trim())
+      void writeFile(logPath, d, { flag: 'a' }).catch(() => undefined)
+    })
     proc.on('exit', (code) => {
       console.warn(`[sidecar] завершился с кодом ${code}`)
       this.proc = null
@@ -364,8 +371,21 @@ class SidecarManager {
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
-    const data = (await res.json()) as { detail?: string }
-    if (!res.ok) throw new Error(data.detail ?? `sidecar HTTP ${res.status}`)
+    // Необработанные исключения FastAPI приходят простым текстом
+    // («Internal Server Error») — не роняем JSON-парсер, показываем как есть.
+    const text = await res.text()
+    let data: { detail?: string } = {}
+    try {
+      data = JSON.parse(text) as { detail?: string }
+    } catch {
+      /* не-JSON */
+    }
+    if (!res.ok) {
+      throw new Error(
+        data.detail ??
+          `sidecar HTTP ${res.status}: ${text.slice(0, 300)} (подробности: sidecar.log рядом с данными приложения)`,
+      )
+    }
     return data
   }
 

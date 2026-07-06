@@ -62,14 +62,30 @@ MODEL_CFGS = {
 }
 
 
-def _torch_available() -> bool:
+def _torch_import_error() -> Optional[str]:
+    """None — torch/sam2 импортируются; иначе текст ошибки.
+
+    Ловим любую ошибку, не только ImportError: на Windows torch при
+    нехватке системных DLL кидает OSError ([WinError 126] fbgemm.dll и
+    т.п.) — раньше она пролетала до FastAPI и превращалась в голый 500.
+    """
     try:
         import torch  # noqa: F401
         import sam2  # noqa: F401
 
-        return True
-    except ImportError:
-        return False
+        return None
+    except Exception as e:  # noqa: BLE001
+        err = str(e)
+        if "WinError 126" in err or "fbgemm" in err or "c10" in err:
+            err += (
+                " — похоже, не хватает Microsoft Visual C++ Redistributable (x64):"
+                " установите его с сайта Microsoft и перезапустите редактор."
+            )
+        return err
+
+
+def _torch_available() -> bool:
+    return _torch_import_error() is None
 
 
 class SamService:
@@ -85,8 +101,10 @@ class SamService:
         self._register()
 
     def status(self) -> dict:
+        err = _torch_import_error()
         return {
-            "installed": _torch_available(),
+            "installed": err is None,
+            "install_error": err,
             "loaded": self._predictor is not None,
             "model_size": self._model_size,
             "device": self._device,
@@ -116,7 +134,7 @@ class SamService:
                 "received": 0,
                 "total": 0,
             }
-            asyncio.get_event_loop().create_task(
+            asyncio.get_running_loop().create_task(
                 self._download(req.model_size, CHECKPOINT_URLS[req.model_size], dest)
             )
             return {"ok": True, "already": False}
@@ -127,8 +145,9 @@ class SamService:
 
         @router.post("/load")
         async def load(req: LoadRequest) -> dict:
-            if not _torch_available():
-                raise HTTPException(409, "torch/sam2 не установлены")
+            import_err = _torch_import_error()
+            if import_err is not None:
+                raise HTTPException(409, f"torch/sam2 не импортируются: {import_err}")
             if req.model_size not in MODEL_CFGS:
                 raise HTTPException(400, f"неизвестный размер модели: {req.model_size}")
             ckpt = checkpoint_path(req.model_size)
