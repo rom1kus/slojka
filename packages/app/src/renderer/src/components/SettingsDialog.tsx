@@ -221,9 +221,23 @@ export function SettingsDialog(): React.JSX.Element | null {
 
           {ai.progress && (
             <div className="ai-progress">
-              <span>{ai.progress.message}</span>
-              {ai.progress.pct !== undefined && (
-                <progress value={ai.progress.pct} max={1} style={{ width: '100%' }} />
+              <span className="ai-progress-row">
+                {ai.progress.stage !== 'done' && ai.progress.stage !== 'error' && (
+                  <span className="spinner" />
+                )}
+                <span className="ai-progress-msg">{ai.progress.message}</span>
+              </span>
+              {ai.progress.stage !== 'done' && ai.progress.stage !== 'error' && (
+                <>
+                  {ai.progress.pct !== undefined ? (
+                    <progress value={ai.progress.pct} max={1} style={{ width: '100%' }} />
+                  ) : (
+                    // Процент неизвестен (venv, распаковка pip) — «живая» полоса:
+                    // видно, что установка идёт, а не зависла.
+                    <div className="progress-indeterminate" />
+                  )}
+                  <span className="opt-hint">{t('settingsDlg.installHint')}</span>
+                </>
               )}
             </div>
           )}

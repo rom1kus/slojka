@@ -185,6 +185,8 @@ export const ru = {
     samNotInstalled: 'не установлена',
     samConfirm: 'Будет скачано ~2,5 ГБ (PyTorch + CUDA) и выбранная модель. Продолжить?',
     samConfirmYes: 'Скачать и установить',
+    installHint:
+      'Установка идёт — не закрывайте редактор. Крупные пакеты (PyTorch ~2,5 ГБ) скачиваются несколько минут.',
   },
   selection: {
     op: 'Режим',

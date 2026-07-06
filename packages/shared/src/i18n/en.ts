@@ -189,6 +189,8 @@ export const en: Mirror<typeof ru> = {
     samNotInstalled: 'not installed',
     samConfirm: 'This will download ~2.5 GB (PyTorch + CUDA) plus the selected model. Continue?',
     samConfirmYes: 'Download and install',
+    installHint:
+      'Installation is in progress — do not close the editor. Large packages (PyTorch ~2.5 GB) take a few minutes to download.',
   },
   selection: {
     op: 'Mode',

@@ -31,6 +31,21 @@ function modelsDir(): string {
   return join(dataDir(), 'models')
 }
 
+/**
+ * Человеческий прогресс из строки pip: срезаем «полосу» из дефисов и
+ * вытаскиваем «скачано/всего» — для больших пакетов (torch ~2.5 ГБ)
+ * это честный процент текущей загрузки.
+ */
+function pipLineProgress(line: string): { message: string; pct?: number } {
+  const message = line.replace(/[-—─]{4,}/g, '').replace(/\s+/g, ' ').trim()
+  const m = message.match(/([\d.]+)\/([\d.]+) (kB|MB|GB)/)
+  if (!m) return { message }
+  const cur = Number.parseFloat(m[1]!)
+  const total = Number.parseFloat(m[2]!)
+  if (!Number.isFinite(cur) || !Number.isFinite(total) || total <= 0) return { message }
+  return { message, pct: Math.min(1, cur / total) }
+}
+
 function venvBin(name: string): string {
   // Windows кладёт исполняемые файлы venv в Scripts\*.exe, POSIX — в bin/.
   return process.platform === 'win32'
@@ -121,7 +136,7 @@ class SidecarManager {
         venvBin('python'),
         ['-m', 'pip', 'install', '--no-input', '-r', join(sidecarSrcDir(), 'requirements-base.txt')],
         'установка базовых зависимостей',
-        (line) => this.progress({ stage: 'pip-base', message: line }),
+        (line) => this.progress({ stage: 'pip-base', ...pipLineProgress(line) }),
       )
     }
     await this.start()
@@ -170,7 +185,7 @@ class SidecarManager {
       venvBin('python'),
       ['-m', 'pip', 'install', '--no-input', '-r', join(sidecarSrcDir(), 'requirements-ai.txt')],
       'установка torch/sam2',
-      (line) => this.progress({ stage: 'pip-ai', message: line }),
+      (line) => this.progress({ stage: 'pip-ai', ...pipLineProgress(line) }),
     )
     // Новые пакеты подхватятся при следующем /sam/load (lazy import).
   }
