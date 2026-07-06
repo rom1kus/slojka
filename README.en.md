@@ -85,11 +85,13 @@ npm run dist -- --win   # build the Windows installer
 ```
 
 ### Enabling the AI features
-1. **Local AI (SAM 2.1)**: requires Python ≥ 3.10. Open
-   ⚙ Settings → "Local AI" → "Enable" (~15 MB environment), then
-   "Install SAM 2.1" (PyTorch, ~2.5 GB, downloaded only after explicit
-   consent) and pick a model (from 156 MB). Everything lives in an
-   isolated venv.
+1. **Local AI (SAM 2.1)**: requires Python ≥ 3.10 (the Slojka Windows
+   installer sets up Python 3.11 and the Microsoft VC++ Redistributable
+   automatically if missing; on Linux install python3 with your package
+   manager). Open ⚙ Settings → "Local AI" → "Enable" (~15 MB
+   environment), then "Install SAM 2.1" (PyTorch, ~2.5 GB, downloaded
+   only after explicit consent) and pick a model (from 156 MB).
+   Everything lives in an isolated venv.
 2. **Generation (polza.ai)**: paste your API key into the "AI generation"
    panel. The key is stored in the system keyring.
 3. **AI assistant**: install [Claude Code](https://claude.com/claude-code)
