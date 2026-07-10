@@ -2,12 +2,16 @@
 
 **[English version → README.en.md](README.en.md)**
 
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL_3.0-blue.svg)](LICENSE)
+
 AI-first графический редактор в духе Photoshop: слои, маски, выделения,
 кисти — плюс нативная интеграция локальной сегментации SAM 2.1, хаба
 генерации изображений polza.ai и AI-ассистента (Claude Code), который
 управляет редактором через MCP. Интерфейс: русский (основной) и английский.
 
 ![Демонстрация Слойки](demo.gif)
+
+Вы поддержите меня, если зарегистрируетесь по данной ссылке: [https://polza.ai/?referral=g5TV6XOHZU](url)
 
 ## Возможности
 
