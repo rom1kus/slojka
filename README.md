@@ -11,7 +11,7 @@ AI-first графический редактор в духе Photoshop: слои
 
 ![Демонстрация Слойки](demo.gif)
 
-Вы поддержите меня, если зарегистрируетесь по данной ссылке: [https://polza.ai/?referral=g5TV6XOHZU]([url](https://polza.ai/?referral=g5TV6XOHZU))
+Вы поддержите меня, если зарегистрируетесь по данной ссылке: [https://polza.ai/?referral=g5TV6XOHZU](https://polza.ai/?referral=g5TV6XOHZU)
 
 ## Возможности
 
