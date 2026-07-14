@@ -109,6 +109,32 @@ class SidecarManager {
     return null
   }
 
+  /**
+   * Абсолютный путь реального python-бинаря (симлинки развёрнуты).
+   * uv/pyenv кладут в PATH симлинк на python-build-standalone; venv,
+   * созданный через такой симлинк, получает в pyvenv.cfg `home` каталог
+   * симлинка, интерпретатор не находит stdlib (base_prefix улетает в
+   * прошитый '/install') и ensurepip падает на «No module named
+   * 'encodings'» (#1). Venv от реального бинаря работает.
+   */
+  private async resolvePython(cmd: string): Promise<string> {
+    const { code, output } = await this.run(cmd, [
+      '-c',
+      'import os, sys; print(os.path.realpath(sys.executable))',
+    ])
+    if (code !== 0) return cmd
+    // stdout и stderr смешаны — берём последнюю строку и проверяем,
+    // что такой файл существует; иначе работаем как раньше.
+    const real = output.trim().split('\n').at(-1)?.trim()
+    if (!real) return cmd
+    try {
+      await access(real)
+      return real
+    } catch {
+      return cmd
+    }
+  }
+
   async baseInstalled(): Promise<boolean> {
     try {
       await access(venvBin('python'))
@@ -127,7 +153,9 @@ class SidecarManager {
     if (!(await this.baseInstalled())) {
       this.progress({ stage: 'venv', message: 'Создание окружения Python…' })
       await mkdir(dataDir(), { recursive: true })
-      await this.runOrThrow(python, ['-m', 'venv', venvDir()], 'создание venv')
+      // --clear: заодно начисто пересоздаёт venv, сломанный симлинком ранее.
+      const realPython = await this.resolvePython(python)
+      await this.runOrThrow(realPython, ['-m', 'venv', '--clear', venvDir()], 'создание venv')
 
       this.progress({ stage: 'pip-base', message: 'Установка базовых зависимостей (~15 МБ)…' })
       // python -m pip, а не pip.exe: exe-лаунчер pip на Windows ломается
