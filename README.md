@@ -13,6 +13,8 @@ AI-first графический редактор в духе Photoshop: слои
 
 Вы поддержите меня, если зарегистрируетесь по данной ссылке: [https://polza.ai/?referral=g5TV6XOHZU](https://polza.ai/?referral=g5TV6XOHZU)
 
+Поддержать меня можно также на Boosty: https://boosty.to/triangle_black/
+
 ## Возможности
 
 ### Редактор
